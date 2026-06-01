@@ -49,11 +49,6 @@ Pkg.add([
     "Plots"
 ])
 ```
-
-> The script also calls `python3` with `Pillow` to embed 300 DPI metadata in the
-> PNG figures. Install with `pip install Pillow` if needed (optional — the figures
-> are saved correctly without it, only the DPI tag is affected).
-
 ***
 
 ## Reproducing the results
