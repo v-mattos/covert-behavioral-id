@@ -53,21 +53,12 @@ using Pkg
 Pkg.add(["FFTW", "JuMP", "OSQP", "Plots", "LaTeXStrings"])
 ```
 
-(`LinearAlgebra`, `Statistics`, `Printf`, and `Random` are Julia standard-library
-packages and require no installation.)
-
 ---
 
 ## Reproducing the results
 
 ```
 julia main.jl
-```
-
-or from the Julia REPL:
-
-```julia
-include("main.jl")
 ```
 
 The script runs the full simulation and then prints a consistency audit. All results
@@ -129,11 +120,3 @@ Cc = [1.0  -0.1673],             Dc = 0.1701
 | `δ₂` | 10⁻² | Phase 2 rank-increasing amplitude |
 | `λ_g` | 10⁻⁵ | DeePC regularization on `g` |
 | `λ_u` | 10⁻³ | DeePC regularization on `u_f` |
-
----
-
-## References
-
-- J. C. Willems et al., "A note on persistency of excitation," *Systems & Control Letters*, 2005.
-- H. J. van Waarde et al., "Willems' fundamental lemma for state-space systems and its extension to multiple datasets," *IEEE Control Systems Letters*, 2020.
-- J. Coulson, J. Lygeros, F. Dörfler, "Data-enabled predictive control: In the shallows of the DeePC," *ECC*, 2019.
