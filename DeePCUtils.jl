@@ -1,10 +1,10 @@
 module DeePCUtils
 
-using LinearAlgebra, Statistics, FFTW
+using LinearAlgebra, Statistics
 
 export DiscreteSystem, step!, reset!
 export build_data_matrix, hankellize
-export estimate_SP_hinf
+export estimate_peak_gain
 
 # Discrete-time LTI system  x[t+1] = A x[t] + B u[t],  y[t] = C x[t] + D u[t]
 mutable struct DiscreteSystem
@@ -56,22 +56,18 @@ function build_data_matrix(U::Matrix{Float64}, Y::Matrix{Float64}, Tini::Int, N:
     return (Up=Hu[1:Tini*m, :], Uf=Hu[Tini*m+1:end, :], Yp=Hy[1:Tini*p, :], Yf=Hy[Tini*p+1:end, :])
 end
 
-# Estimate empirical peak gain Ĝ_∞ via the Empirical Transfer Function Estimate (ETFE).
-# Used to set the Phase-1 stealth bound δ₁ ≤ (ε_ids − ε_ss) / Ĝ_∞  (paper Eq. 390–394).
-function estimate_SP_hinf(y_phase1::Vector{Float64},
-                          u_a_phase1::Vector{Float64},
-                          y_ref::Float64)
-    N     = length(y_phase1)
-    y_c   = y_phase1 .- y_ref   # remove DC tracking component
-
-    Y     = fft(y_c)
-    U_a   = fft(u_a_phase1)
-
-    tol      = 1e-8 * maximum(abs.(U_a))
-    valid    = abs.(U_a) .> tol
-    SP_mag   = abs.(Y[valid]) ./ abs.(U_a[valid])
-
-    return maximum(SP_mag)
+# Estimate the empirical peak (ℓ∞-induced) gain Ĝ_∞ (Definition 1, Eq. 390–394):
+# the realized ratio of peak output deviation to peak input deviation over the
+# Phase-1 probing window. The Rademacher injection has constant magnitude, so
+# max|u_a| = δ₁ exactly, and Ĝ_∞ := max|Δy| / δ₁ is a direct empirical instance
+# of sup_{Δu≠0} ‖Δy‖∞/‖Δu‖∞ — the same ℓ∞-induced quantity Definition 1 asks
+# for, not a surrogate (the previous ETFE/FFT-based estimator targeted the
+# H∞ / ℓ2-induced gain instead, a different and generally smaller quantity).
+function estimate_peak_gain(y_phase1::Vector{Float64},
+                             u_a_phase1::Vector{Float64},
+                             y_ref::Float64)
+    y_c = y_phase1 .- y_ref
+    return maximum(abs.(y_c)) / maximum(abs.(u_a_phase1))
 end
 
 end

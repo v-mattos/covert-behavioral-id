@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 
-using LinearAlgebra, Statistics, Printf, Random, JuMP, OSQP
+using LinearAlgebra, Statistics, Printf, Random, JuMP, OSQP, DelimitedFiles
 using MathOptInterface
 const MOI = MathOptInterface
 using Plots
@@ -131,10 +131,11 @@ for t in 1:LEN_PHASE_1
 end
 
 # ── Empirical peak gain Ĝ_∞ (Eq. 390–394, Section 4.3) ───────────────────
-# Estimated via the Empirical Transfer Function Estimate (ETFE) from Phase-1 data.
+# Estimated as the realized peak-to-peak (ℓ∞-induced) ratio over Phase-1 data,
+# matching Definition 1 directly (see DeePCUtils.estimate_peak_gain).
 # Used to set ε_ids: any δ₁ satisfying δ₁ ≤ (ε_ids − ε_ss) / Ĝ_∞ keeps the
 # unmasked output deviation below the IDS threshold (Assumption 1).
-G_hat_inf = estimate_SP_hinf(
+G_hat_inf = estimate_peak_gain(
     Y_full[idx_learn_start:end],
     U_id[idx_learn_start:end],
     Float64(ID_REF))
@@ -158,7 +159,7 @@ H0_saved = copy(H_k)
 # 4 full periods so the system reaches periodic steady state, then take the
 # last L consecutive samples.  The resulting w* is a genuine plant trajectory
 # and therefore lies in B_L; after TC1 it is exactly representable by H^(K)
-# (Fundamental Lemma, Theorem 1; projection error d_K(w*) = 0, Corollary 1).
+# (Fundamental Lemma, Theorem 1; projection error d_K(w*) = 0, Corollary 4).
 let
     sp = DiscreteSystem(A_p, B_p, C_p, D_p; noise_std=0.0)
     sc = DiscreteSystem(A_c, B_c, C_c, D_c)
@@ -192,8 +193,8 @@ proj_error_hist     = Float64[]
 # ── Phase 2: iterative rank-increasing identification (Section 6) ─────────
 # At each step choose_u_waarde_siso checks whether the left-kernel condition
 # (Eq. 670–673) would be satisfied by the next Hankel column.  If so, it
-# selects u_{a,t} satisfying (ξ_L^u)ᵀ u_{a,t} ≠ α_t (Proposition 1 /
-# Eq. 699–713) to guarantee rank(H^(k+1)) = rank(H^(k)) + 1.
+# selects u_{a,t} satisfying (ξ_L^u)ᵀ u_{a,t} ≠ α_t (Proposition 2)
+# to guarantee rank(H^(k+1)) = rank(H^(k)) + 1.
 k_phase2 = 0
 while true
     u_id_now, _, rank_before, residual0 = choose_u_waarde_siso(
@@ -302,6 +303,8 @@ u_a_p3       = Float64[];  y_a_p3    = Float64[]
 y_true_p3    = Float64[];  y_fake_p3 = Float64[]
 u_c_p3       = Float64[];  phase3_ok = Bool[]
 y_ref_p3     = Float64[]   # instantaneous reference y*(t) at each step
+w_ini_hist   = Vector{Vector{Float64}}()  # past window at each solve, for the
+                                           # receding-horizon audit below
 
 # Receding-horizon Phase-3 loop (Section 9): at each step, solve the DeePC
 # attack QP, apply the first optimal input u_{a,t} = u_{f,0} − u_{c,t}, and
@@ -316,6 +319,7 @@ for k in 1:LEN_PHASE_3
 
     u_c   = step!(legit_ctrl, [Float64(ID_REF);;] .- [Y_fake[end];;])[1]
     w_ini = vcat(u_learn[end-T_ini+1:end], y_learn[end-T_ini+1:end])
+    push!(w_ini_hist, copy(w_ini))
 
     uf_opt, yf_opt = solve_attack_qp(
         H_p_K, H_f_u_K, H_f_y_K,
@@ -397,7 +401,7 @@ audit("T* = n+(m+1)L-1 = 45",
       T_star == 45,
       "T*=$T_star")
 
-audit("T_2 = n+mL-1 = 23  (Phase-2 duration, eq. 8)",
+audit("T_2 = n+mL-1 = 23  (Phase-2 duration, Remark 3)",
       T_2 == 23,
       "T_2=$T_2")
 
@@ -484,7 +488,7 @@ audit("Total samples T_1+T_2 = T* = $T_star",
 # Rank staircase: +1 per step
 rank_seq = vcat(1, rank_after_hist)
 rank_diffs = diff(rank_seq)
-audit("Rank increases by exactly +1 at each iteration (Prop. 1)",
+audit("Rank increases by exactly +1 at each iteration (Proposition 2)",
       all(rank_diffs .== 1),
       "Δrank values: $(unique(rank_diffs))")
 
@@ -496,14 +500,14 @@ audit("Final rank = n+mL = $FULL_RANK_TARGET  (TC1)",
 d_vals = vcat(d0, proj_error_hist)
 d_diffs = diff(d_vals)
 mono_strict = all(d_diffs .< 0)
-audit("d_k(w*) strictly monotone decreasing (Lemma 2)",
+audit("d_k(w*) strictly monotone decreasing (Theorem 3)",
       mono_strict,
       mono_strict ? "All Δd_k < 0 ✓" :
       @sprintf("Non-monotone at steps: %s", string(findall(d_diffs .>= 0))))
 
 # d_K = 0 at TC1
 d_K = isempty(proj_error_hist) ? d0 : proj_error_hist[end]
-audit("d_K(w*) = 0 at TC1 (Corollary 1): d_K < 1e-8",
+audit("d_K(w*) = 0 at TC1 (Corollary 4): d_K < 1e-8",
       d_K < 1e-8,
       @sprintf("d_K = %.4e", d_K))
 
@@ -516,7 +520,7 @@ audit("w* ∈ B_L: ‖H^(K)H^(K)†w* − w*‖ < 1e-7  (shadow sim)",
 
 # Order recovery: n = rank(H^(K)) − mL
 n_recovered = FULL_RANK_TARGET - m*L
-audit("Order recovery: n = rank(H^(K)) − mL = $n_recovered  (eq. 9)",
+audit("Order recovery: n = rank(H^(K)) − mL = $n_recovered  (TC1)",
       n_recovered == n,
       "n_recovered=$n_recovered, n=$n")
 
@@ -546,11 +550,16 @@ if !isempty(y_a_hist)
           @sprintf("max|y_a| = %.4e", maximum(abs.(y_a_hist))))
 end
 
-# Masked ≤ unmasked residual for steps where Prop. 2 condition can be assessed
-# prop2_count = count(masked_resid_hist .< unmasked_resid_hist)
+# Masked ≤ unmasked residual for a majority of Phase-2 steps. The analytical
+# sufficient condition for this (formerly Proposition 5, "Sufficient Condition
+# for Residual Reduction") was cut from the 6pp camera-ready (see CHANGELOG
+# entry 16); it is not a numbered result in the current paper, only in
+# main_draft.tex / an eventual extended version. This check is now a plain
+# empirical sanity check on masking effectiveness, not a verification of a
+# cited theorem.
 if !isempty(masked_resid_hist)
     prop2_frac = count(masked_resid_hist .< unmasked_resid_hist) / length(masked_resid_hist)
-    audit("Masked residual < unmasked for majority of Phase-2 steps (Prop. 2)",
+    audit("Masked residual < unmasked for majority of Phase-2 steps (masking effectiveness)",
           prop2_frac > 0.5,
           @sprintf("%.0f%% of steps have ‖r_c‖ < ‖r_u‖", 100*prop2_frac))
 end
@@ -579,9 +588,15 @@ audit("Stealth: max‖ỹ_t−ȳ‖_∞ ≤ ε_ids throughout Phase 3",
       max_fake_err <= EPS_IDS + 1e-10,
       @sprintf("max‖ỹ_t−ȳ‖ = %.4e  ε_ids = %.4f", max_fake_err, EPS_IDS))
 
-# Receding horizon: checked by code structure (first element applied per QP)
-audit("Receding horizon: only u_f[1] applied per step  (code structure)",
-      true, "Verified by code: u_a_now = uf_opt[1] − u_c")
+# Receding horizon: the QP is genuinely re-solved each step, not solved once
+# and replayed — verify the past window w_ini (which conditions each solve)
+# actually changes step to step, since it always contains the most recent
+# T_ini samples.
+w_ini_changes = count(k -> w_ini_hist[k] != w_ini_hist[k-1], 2:length(w_ini_hist))
+audit("Receding horizon: past window w_ini updates every step (not a fixed open-loop plan)",
+      w_ini_changes == length(w_ini_hist) - 1,
+      @sprintf("%d / %d consecutive steps show a changed w_ini",
+               w_ini_changes, length(w_ini_hist) - 1))
 
 # QP structure: behavioral consistency + IDS satisfied by masking
 # With noise-free full-rank H^(K): ỹ = y_f + y_a = y_f − (y_f − ȳ) = ȳ exactly
@@ -591,7 +606,7 @@ audit("IDS satisfied trivially: ỹ_t = ȳ (eq. deepc-ids, noise-free full-rank)
       @sprintf("max|ỹ_t − ȳ| = %.2e", maximum(abs.(y_fake_p3 .- y_bar))))
 
 # ── Causal prediction error at TC1 ──────────────────────────────────────
-println("\n── Causal Prediction Error at TC1 (Remark 8) ───────────────────────")
+println("\n── Causal Prediction Error at TC1 (Corollary 4) ────────────────────")
 
 # Generate 5 fresh test trajectories from the plant (not used in training)
 # and check that H^(K) predicts their futures exactly (noise-free + full rank).
@@ -632,7 +647,7 @@ pred_errs = let
     errs
 end
 max_pred_err = maximum(pred_errs)
-audit("Causal prediction error at TC1 < 1e-6 (two-block solve, Remark 8)",
+audit("Causal prediction error at TC1 < 1e-6 (two-block solve, Corollary 4)",
       max_pred_err < 1e-6,
       @sprintf("max prediction error (5 fresh trajectories) = %.4e", max_pred_err))
 
@@ -687,9 +702,32 @@ COMMON = (
     margin                  = 6Plots.mm,
 )
 
+
+# Each figure gets its own subfolder: figures/<stem>/<stem>.pdf plus the
+# CSV(s) backing it, so a reader can regenerate the plot from raw numbers
+# without rerunning the simulation.
 function save_fig(p, stem)
-    savefig(p, "figures/$(stem).pdf")
-    println("     saved figures/$(stem).pdf")
+    dir = "figures/$(stem)"
+    mkpath(dir)
+    savefig(p, "$(dir)/$(stem).pdf")
+    println("     saved $(dir)/$(stem).pdf")
+end
+
+function save_csv(stem::AbstractString, filename::AbstractString,
+                   header::Vector{String}, cols...)
+    dir = "figures/$(stem)"
+    mkpath(dir)
+    path = joinpath(dir, filename)
+    n = length(cols[1])
+    data = Array{Any}(undef, n, length(cols))
+    for (j, col) in enumerate(cols), i in 1:n
+        data[i, j] = col[i]
+    end
+    open(path, "w") do io
+        println(io, join(header, ","))
+        writedlm(io, data, ',')
+    end
+    println("     saved $(path)")
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -778,6 +816,12 @@ fig2_unified = plot(p_top, p_bot;
     legend=:topright,
     link=:x)
 save_fig(fig2_unified, "fig2_unified")
+save_csv("fig2_unified", "residuals.csv",
+    ["t", "residual_masked", "residual_unmasked"],
+    t_axis, resid_masked, resid_unmasked)
+save_csv("fig2_unified", "output_tracking.csv",
+    ["t", "y", "y_ref"],
+    t_axis, y_full_plot, y_ref_full)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FIG 3  (fig:phase2) — 3 panels side by side
@@ -806,8 +850,8 @@ hline!(p3a, [FULL_RANK_TARGET];
 
 # (b) Normalised projection error on linear scale.
 # w* is the sinusoidal shadow trajectory (consistent with Phase 3 execution).
-# Monotone non-increasing (Lemma 1), strictly decreasing a.s. (Lemma 2).
-# Reaches 0 exactly at TC1 (Cor. 1).
+# Strictly decreasing a.s. at each rank increase (Theorem 3).
+# Reaches 0 exactly at TC1 (Corollary 4).
 p3b = plot(k_axis, d_norm_all;
     label="dₖ(w*) / d₀(w*)", color=C_BLUE,
     marker=:circle, markersize=4, lw=1.5,
@@ -822,8 +866,13 @@ hline!(p3b, [0.0]; color=C_BLACK, lw=0.8, ls=:dot, label="")
 
 fig3a = plot(p3a, size=(700, 550))
 save_fig(fig3a, "fig3_rank_growth")
+save_csv("fig3_rank_growth", "rank_growth.csv",
+    ["k", "rank"], k_axis, rank_stair)
+
 fig3b = plot(p3b, size=(700, 550))
 save_fig(fig3b, "fig4_projection_error")
+save_csv("fig4_projection_error", "projection_error.csv",
+    ["k", "d_raw", "d_normalized"], k_axis, d_all, d_norm_all)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SUMMARY
@@ -844,10 +893,10 @@ println()
 @printf("  Max |ỹ_t − ȳ|:              %.4e  (ε_ids = %.4f)\n",
         maximum(abs.(y_fake_p3 .- y_bar)), EPS_IDS)
 println()
-println("  Figures → ./figures/")
-println("    fig2_unified.pdf          (\\label{fig:unified})")
-println("    fig3_rank_growth.pdf      (\\label{fig:rank-growth})")
-println("    fig4_projection_error.pdf (\\label{fig:projection-error})")
+println("  Figures → ./figures/<stem>/<stem>.pdf (+ CSV data alongside each)")
+println("    fig2_unified/          top+middle panels of \\label{fig:unified} (camera-ready)")
+println("    fig4_projection_error/ bottom panel of \\label{fig:unified} (camera-ready)")
+println("    fig3_rank_growth/      not in the 6pp camera-ready; kept for the extended version")
 println()
 @printf("  Audit: %d PASS, %d FAIL\n", pass_count, fail_count)
 println("="^72)
