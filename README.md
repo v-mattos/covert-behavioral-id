@@ -6,7 +6,8 @@ Companion code for the paper:
 > against Closed-Loop Control Systems"**
 
 Julia implementation of the three-phase, model-free behavioral attack framework
-described in the manuscript. The code reproduces Figures 2–4.
+described in the manuscript. The code reproduces the manuscript's numerical
+illustration (Fig. 1) and its consistency audit.
 
 ---
 
@@ -25,7 +26,7 @@ three sequential phases:
 | Phase | Purpose | Duration |
 |-------|---------|----------|
 | **Phase 1** — Initial covert probing | Small-amplitude Rademacher injection (`±δ₁`) seeds a rank-1 Hankel matrix without triggering the IDS; no sensor masking is applied | `T₁ = L` samples |
-| **Phase 2** — Iterative behavioral identification | Rank-increasing injections guided by the left-kernel condition (Proposition 1) expand the identified behavioral subspace one dimension at a time; predictor-based sensor masking keeps the IDS residual flat | `T₂ = n + mL − 1` steps |
+| **Phase 2** — Iterative behavioral identification | Rank-increasing injections guided by the left-kernel condition (Proposition 2) expand the identified behavioral subspace one dimension at a time; predictor-based sensor masking keeps the IDS residual flat | `T₂ = n + mL − 1` steps |
 | **Phase 3** — Covert misappropriation | A DeePC-style convex QP (receding-horizon) drives the plant to a malicious sinusoidal reference while the masked sensor signal remains within the IDS threshold | 100 steps |
 
 The key theoretical tools are Willems' Fundamental Lemma (behavioral systems theory),
@@ -39,7 +40,8 @@ DeePC-style data-driven predictive control (Coulson et al., 2019).
 ```
 ├── main.jl           # Entry point — phases 1–3, consistency audit, figure generation
 ├── DeePCUtils.jl     # Discrete-time LTI simulator, Hankel matrix utilities, peak-gain estimation
-└── WaardePhase2.jl   # Online rank-increasing experiment design (van Waarde et al., 2021)
+├── WaardePhase2.jl   # Online rank-increasing experiment design (van Waarde et al., 2021)
+└── figures/          # Generated: one subfolder per figure, each with a PDF + backing CSV(s)
 ```
 
 ---
@@ -50,7 +52,7 @@ Julia **1.10** or later. Install the required packages from the Julia REPL:
 
 ```julia
 using Pkg
-Pkg.add(["FFTW", "JuMP", "OSQP", "Plots", "LaTeXStrings"])
+Pkg.add(["JuMP", "OSQP", "Plots", "LaTeXStrings"])
 ```
 
 ---
@@ -78,13 +80,18 @@ are deterministic with `Random.seed!(1234)`.
 5. **Consistency audit** — checks parameter values, closed-loop stability, rank
    staircase, projection-error monotonicity, masking effectiveness, QP feasibility,
    and causal prediction accuracy at TC1.
-6. **Figure generation** — saves the following to `figures/`:
+6. **Figure generation** — saves one subfolder per figure under `figures/`,
+   each with the PDF and the CSV(s) backing it, so a plot can be inspected or
+   regenerated from raw numbers without rerunning the simulation:
 
-| File | Paper label | Content |
-|------|------------|---------|
-| `fig2_unified.pdf` | `\label{fig:unified}` | Full attack timeline: masked vs. unmasked IDS residual (log scale, top panel) and true plant output tracking the sinusoidal reference (bottom panel) |
-| `fig3_rank_growth.pdf` | `\label{fig:rank-growth}` | Phase 2 rank-growth staircase: `rank H⁽ᵏ⁾` from 1 to `n + mL = 24` |
-| `fig4_projection_error.pdf` | `\label{fig:projection-error}` | Phase 2 normalized projection error `dₖ(w*)/d₀(w*)` decreasing to zero at full rank (Corollary 1) |
+| Folder | Paper label | Content |
+|--------|------------|---------|
+| `fig2_unified/` | `\label{fig:unified}`, top + middle panels | Masked vs. unmasked IDS residual (log scale) and true plant output tracking the sinusoidal reference |
+| `fig4_projection_error/` | `\label{fig:unified}`, bottom panel | Phase 2 projection error `dₖ(w*)` monotonically decreasing to zero at full rank (Theorem 3, Corollary 4) |
+| `fig3_rank_growth/` | *(not in the current camera-ready)* | Phase 2 rank-growth staircase: `rank H⁽ᵏ⁾` from 1 to `n + mL = 24`. Generated but cut from the manuscript during its page-limit reduction; kept here for an extended/journal version |
+
+The manuscript's Fig. 1 is a single three-panel figure combining `fig2_unified`
+(top/middle) and the bottom panel of `fig4_projection_error`.
 
 ---
 
